@@ -13,4 +13,4 @@ desktop_applaunchname = scrcpy-fnos.Application
 ctl_stop              = true
 os_min_version        = 1.1.3100
 checkport             = false
-changelog             = 0.1.0: 首个版本
+changelog             = 0.1.0: 网页投屏操控安卓（多档画质、声音、触摸控制）+ 文件管理（上传/下载/装 APK）+ 内置终端 + 多设备连接（真机/云手机/redroid 容器）
