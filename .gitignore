@@ -1,0 +1,14 @@
+# Python 字节码缓存 —— 跟着源码装上去，只会让人怀疑到底跑的是不是新代码
+__pycache__/
+*.py[cod]
+
+# 测试工具缓存
+.pytest_cache/
+
+# 打包产物：fpk 由 assemble.sh 现打，不入库
+release/
+*.fpk
+
+# 系统 / 编辑器杂项
+.DS_Store
+Thumbs.db

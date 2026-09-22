@@ -1,0 +1,7 @@
+# 一律按 LF 入库、也按 LF 检出。
+#
+# 本应用是在 Windows 上开发、打包，再部署到 Linux（飞牛 NAS）上跑。
+# shell 脚本一旦带上 CRLF，到了那边会直接报 $'\r': command not found。
+# 而 Git for Windows 的 system 级 core.autocrlf 默认是 true —— 不在仓库里
+# 声明，检出时就会被悄悄转回 CRLF。
+* text=auto eol=lf

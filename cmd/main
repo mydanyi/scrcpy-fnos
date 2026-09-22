@@ -1,0 +1,230 @@
+#!/bin/bash
+# Scrcpy on 飞牛 —— 把 Python 服务直接跑在宿主机上（不依赖 Docker）
+#
+# 服务通过 unix socket 接入飞牛应用网关（见 app/ui/config 的 gatewaySocket），
+# 不占用任何 TCP 端口。
+#
+# 入口为什么必须走网关，而不是直连端口：
+# 网关页面是 https，只有安全上下文下浏览器才允许 WebCodecs 硬解；
+# 直连 http://ip:port 会被浏览器禁掉，画面只能退到软解。
+#
+# 依赖宿主机的 python3 与 adb（install_callback 里已提前查过）。
+
+SERVER_PY="${TRIM_APPDEST}/server.py"
+SOCKET="${TRIM_APPDEST}/app.sock"
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+
+# 探活：进程在 ≠ 服务在。
+# 服务卡死时应用中心该看到「异常」，而不是一直显示「运行中」。
+HEALTH_URL="http://localhost/healthz"
+HEALTH_TIMEOUT="3"          # 探活超时（秒）
+HEALTH_GRACE="15"           # 启动后的宽限秒数，期内不探活（服务还没 listen，探了必然误报）
+HEALTH_WARN_THROTTLE="60"   # 探活失败的 WARN 日志节流窗口（秒）
+HEALTH_WARN_STAMP="${TRIM_PKGVAR}/health-warn.ts"
+
+# 停服务的等待上限：先 SIGTERM，超时就 SIGKILL
+STOP_WAIT="10"
+
+log_msg() {
+    mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+# 把错误暴露到飞牛应用中心界面
+write_user_error() {
+    echo "$1" > "${TRIM_TEMP_LOGFILE}"
+    log_msg "ERROR: $1"
+}
+
+# 读 pidfile 拿 pid，并确认这个 pid 确实是我们的服务。
+# 不只看「pid 活着」：PID 会被系统复用，复用后 kill 过去就是误杀无关进程。
+service_pid() {
+    local pid
+    [ -f "${PID_FILE}" ] || return 1
+    IFS= read -r pid < "${PID_FILE}" 2>/dev/null || return 1
+    case "${pid}" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "${pid}" 2>/dev/null || return 1
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q "server\.py" || return 1
+    fi
+    printf '%s\n' "${pid}"
+    return 0
+}
+
+is_running() {
+    service_pid >/dev/null 2>&1
+}
+
+stop_process() {
+    local pid elapsed=0 pgid= group_ok=0
+    pid="$(service_pid)" || pid=""
+
+    if [ -z "${pid}" ]; then
+        rm -f "${PID_FILE}"
+        log_msg "No running service (pidfile absent or stale)."
+        return 0
+    fi
+
+    # 服务由 setsid 拉起，pid 就是进程组组长（pgid==pid）。
+    # 按进程组停，才能连 python3 拉起的 adb 等子进程一起收掉。
+    # 只在 pgid 是纯数字且确实等于 pid 时才认这个组，避免误杀无关进程组。
+    pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ')"
+    case "${pgid}" in
+        ''|*[!0-9]*) group_ok=0 ;;
+        *) [ "${pgid}" -eq "${pid}" ] && group_ok=1 || group_ok=0 ;;
+    esac
+
+    log_msg "Stopping service (pid=${pid}, pgid=${pgid:-unknown}, group_ok=${group_ok}) ..."
+    if [ "${group_ok}" -eq 1 ]; then
+        # 负数 PID = 负 PGID，整组发 SIGTERM
+        kill -TERM -- "-${pgid}" 2>/dev/null || true
+    else
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+    while [ "${elapsed}" -lt "${STOP_WAIT}" ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        kill -0 "${pid}" 2>/dev/null || break
+    done
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        log_msg "WARN: service did not exit in ${elapsed}s, sending SIGKILL."
+        if [ "${group_ok}" -eq 1 ]; then
+            kill -KILL -- "-${pgid}" 2>/dev/null || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    fi
+
+    rm -f "${PID_FILE}" "${SOCKET}"
+    log_msg "Service stopped."
+    return 0
+}
+
+start_process() {
+    if [ ! -f "${SERVER_PY}" ]; then
+        write_user_error "服务脚本缺失：${SERVER_PY}"
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        write_user_error "未找到 python3，无法启动服务。"
+        return 1
+    fi
+    # adb 优先认**自带**那份（${TRIM_APPDEST}/tool/adb，官方 platform-tools）：
+    # 系统自带的往往太老、没有 `adb pair`，Android 11+ 的无线调试就配不上对。
+    # 只有自带那份不存在时，才退回"要求系统装一个 adb"。
+    if [ ! -x "${TRIM_APPDEST}/tool/adb" ] && ! command -v adb >/dev/null 2>&1; then
+        write_user_error "未找到 adb，投屏功能无法工作。请先安装 adb 后重试。"
+        return 1
+    fi
+
+    if is_running; then
+        log_msg "Service already running (pid=$(service_pid))."
+        return 0
+    fi
+
+    # 上次崩溃可能留下失效的 socket 文件与 pidfile，先清掉再起
+    rm -f "${SOCKET}" "${PID_FILE}"
+
+    log_msg "Starting service: python3 ${SERVER_PY}"
+    setsid nohup python3 "${SERVER_PY}" >> "${LOG_FILE}" 2>&1 < /dev/null &
+    # setsid 在当前进程不是组长时直接 setsid()+exec、不 fork，所以这里的 $! 就是服务本身的 pid
+    printf '%s\n' "$!" > "${PID_FILE}"
+
+    # 等 socket 就绪（最多 10 秒）
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        is_running || break
+        [ -S "${SOCKET}" ] && break
+    done
+
+    if ! is_running; then
+        write_user_error "服务启动失败，请查看日志 ${LOG_FILE}"
+        return 1
+    fi
+
+    # 网关要能连上这个 socket
+    if [ -S "${SOCKET}" ]; then
+        chmod 666 "${SOCKET}" 2>/dev/null || true
+    fi
+
+    log_msg "Service started (pid=$(service_pid), socket=${SOCKET})."
+    return 0
+}
+
+# 服务已经跑了多久（秒）。拿不到就返回非 0。
+# 调用方据此跳过宽限期判断、直接去探活 —— **不**拿它当免检理由，
+# 否则 ps 持续失败时，服务卡死会被一直显示成「运行中」。
+service_uptime() {
+    local pid secs
+    pid="$(service_pid)" || return 1
+    secs="$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ')"
+    case "${secs}" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "${secs}"
+}
+
+# 探活失败的 WARN 要不要写：窗口内只写一条。
+# 应用中心会高频轮询 status，服务一旦卡死，不节流会把 info.log 一直刷下去。
+should_log_health_warn() {
+    local now last=0
+    now="$(date +%s)"
+    if [ -f "${HEALTH_WARN_STAMP}" ]; then
+        IFS= read -r last < "${HEALTH_WARN_STAMP}" 2>/dev/null || true
+    fi
+    case "${last}" in ''|*[!0-9]*) last=0 ;; esac
+    if [ "${last}" -gt 0 ] && [ "$((now - last))" -lt "${HEALTH_WARN_THROTTLE}" ]; then
+        return 1
+    fi
+    printf '%s\n' "${now}" > "${HEALTH_WARN_STAMP}" 2>/dev/null || true
+    return 0
+}
+
+# 服务是否健康：进程在运行，且真的能应答
+status() {
+    is_running || return 1
+
+    local up detail
+    if up="$(service_uptime)"; then
+        # 启动宽限期内不探活，直接认为健康
+        if [ "${up}" -lt "${HEALTH_GRACE}" ]; then
+            return 0
+        fi
+        detail="uptime=${up}s"
+    else
+        # 拿不到启动时间，属异常情况。这里**不能**直接返回健康：
+        # 若一律豁免探活，服务卡死就会被永久显示成「运行中」。
+        detail="uptime=unknown"
+    fi
+
+    if [ -S "${SOCKET}" ] && curl -sf -o /dev/null --max-time "${HEALTH_TIMEOUT}" \
+        --unix-socket "${SOCKET}" "${HEALTH_URL}" 2>/dev/null; then
+        return 0
+    fi
+
+    if should_log_health_warn; then
+        log_msg "WARN: service is running but ${HEALTH_URL} is not responding (${detail})."
+    fi
+    return 1
+}
+
+case "$1" in
+start)
+    start_process
+    ;;
+stop)
+    stop_process
+    ;;
+status)
+    if status; then
+        exit 0
+    else
+        exit 3
+    fi
+    ;;
+*)
+    echo "Unknown command: $1" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
+    ;;
+esac

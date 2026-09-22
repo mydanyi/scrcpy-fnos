@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>牛牛牧场</title>
+<link rel="icon" href="data:,"><!-- 空图标，省掉浏览器那次注定 404 的 favicon 请求 -->
+<style>
+  /* ================= 设计变量 =================
+     一处改、全局跟着走：圆角/描边/字号/控件高度都收进来，
+     免得同一个界面里出现 7px 8px 9px 10px 四种圆角这种"手写久了必然发生"的事。 */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d13;
+    --panel: #111722;
+    --panel-2: #18202e;
+    --panel-3: #212c3d;
+    --line: #212b3a;
+    --line-2: #2e3b4f;
+    --text: #e8ecf4;
+    --muted: #8a97ae;
+    --dim: #5b6880;
+    --accent: #3b82f6;
+    --accent-hi: #2f6fe0;
+    --accent-soft: rgba(59, 130, 246, .16);
+    --danger: #a51f1f;
+    --danger-hi: #8b1a1a;
+    --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+    --r-sm: 7px; --r: 9px; --r-lg: 13px;
+    --ctl-h: 32px;
+    --sh: 0 10px 30px rgba(0, 0, 0, .45);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+
+  /* ================= 控件 =================
+     button 统一成固定高度的 flex 盒子：以前不同区域的按钮高度由 padding 各算各的，
+     一行里排一起就高矮不齐。下面凡是"不该是 32px"的按钮（按键、列表里的 ×）单独点名覆盖。 */
+  button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: var(--ctl-h); padding: 0 12px; flex: none;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+    transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  }
+  button:hover:not(:disabled) { background: var(--panel-3); border-color: var(--line-2); }
+  button:active:not(:disabled) { background: #26334a; }
+  button:disabled { opacity: .34; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 500; }
+  button.primary:hover:not(:disabled) { background: var(--accent-hi); border-color: var(--accent-hi); }
+  button.danger { background: var(--danger); border-color: var(--danger); }
+  button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color: var(--danger-hi); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover:not(:disabled) { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  button.mini { height: 26px; padding: 0 9px; font-size: 12px; border-radius: var(--r-sm); }
+
+  input[type=text], input[type=number], select, textarea {
+    background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; height: var(--ctl-h); padding: 0 10px; font: inherit; font-size: 13px;
+    transition: border-color .15s, background .15s; min-width: 0;
+  }
+  textarea { height: auto; padding: 8px 10px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); background: #0d1219; }
+  input::placeholder, textarea::placeholder { color: #4e5a70; }
+
+  /* ================= 三栏骨架：左设备列表 / 中画面 / 右按键 ================= */
+  /* 「收起」= 真的从布局里拿掉（display:none），不是推出屏幕外。
+     所有宽度一个行为，不给"点了没反应"留机会。 */
+  .app { display: flex; height: 100%; min-height: 0; transition: padding-right .2s ease; }
+  .app.side-off .sidebar { display: none; }
+  .app.keys-off .keybar { display: none; }
+  /* ---- 抽屉的布局占位 ----
+     抽屉是「从右边推进来的一栏」，不是浮在画面上的浮层：打开时 .app 必须真的
+     让出那一条宽度（padding-right），画面跟着变窄，而不是被盖掉右边一半。
+     宽度数值只在下面抽屉那一段定义（--drawer-w-*），这里只负责按当前开着的
+     抽屉（data-drawer）挑一条用 —— 同一份宽度不写两遍，就不会两处走散。 */
+  .app.has-drawer[data-drawer="logPanel"] { padding-right: var(--drawer-w-log); }
+  .app.has-drawer[data-drawer="statPanel"] { padding-right: var(--drawer-w-stat); }
+  .app.has-drawer[data-drawer="filePanel"] { padding-right: var(--drawer-w-file); }
+  .app.has-drawer[data-drawer="shellPanel"] { padding-right: var(--drawer-w-shell); }
+
+  /* ---- 左侧：设备列表 ---- */
+  .sidebar {
+    width: 248px; flex: none; display: flex; flex-direction: column;
+    background: var(--panel); border-right: 1px solid var(--line); min-height: 0;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 14px; flex: none;
+    font-size: 14px; font-weight: 600; letter-spacing: .4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); transition: background .2s, box-shadow .2s; }
+  .brand.live .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(52, 211, 153, .15); }
+
+  /* 主操作独占一行、次操作两两并排 —— 三个等宽按钮挤一排时，
+     「添加设备」和「删除设备」看上去一样重要，容易误点删除。 */
+  .side-actions { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 4px; flex: none; }
+  .side-actions .row { display: flex; gap: 6px; }
+  .side-actions .row button { flex: 1 1 0; }
+
+  .side-head {
+    display: flex; align-items: center; gap: 4px; flex: none;
+    padding: 10px 10px 6px 14px; font-size: 12px; color: var(--muted); letter-spacing: .6px;
+  }
+  .side-head .spacer { flex: 1; }
+
+  .devices { flex: 1 1 auto; overflow: auto; padding: 0 8px 10px; min-height: 0; }
+  .devices .empty { color: var(--dim); font-size: 13px; text-align: center; padding: 26px 8px; line-height: 2; }
+  .dev {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    padding: 9px 10px; margin-bottom: 5px; border-radius: var(--r);
+    background: transparent; border: 1px solid transparent; cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .dev:hover { background: var(--panel-2); }
+  .dev.active { background: var(--panel-2); border-color: var(--accent); }
+  .dev .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dev.running .sd { background: var(--ok); box-shadow: 0 0 7px rgba(52, 211, 153, .55); }
+  .dev.starting .sd { background: var(--warn); animation: pulse 1s infinite; }
+  .dev.error .sd { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  /* 名字和副标题要上下两行。两个都是行内 span，不加 flex 列就会挤在同一行、
+     被 sidebar 的宽度裁掉 —— overflow/text-overflow 对行内元素本来也不生效。 */
+  .dev .txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .dev .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev .sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 列表里的 × 是行内小件，不能被上面 button 的 32px 固定高撑开 */
+  .dev .x {
+    flex: none; width: 24px; height: 24px; padding: 0; font-size: 15px; line-height: 1;
+    background: transparent; border: none; border-radius: var(--r-sm); color: var(--dim);
+  }
+  .dev .x:hover:not(:disabled) { background: rgba(248, 113, 113, .14); border: none; color: var(--err); }
+
+  /* ---- 中间：画面 ---- */
+  .stage { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .stage-head {
+    display: flex; align-items: center; gap: 10px; flex: none;
+    height: 46px; padding: 0 12px 0 14px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  /* 设备名允许收缩，按钮永远不收缩 —— 窄屏上先牺牲文字，别把按钮挤出屏幕 */
+  .stage-head .head-info { display: flex; align-items: baseline; gap: 8px; flex: 1 1 auto; min-width: 0; }
+  .stage-head .cur { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .stage-head .cur b { color: var(--text); font-weight: 600; }
+  .stage-head .meta { font-size: 12px; color: var(--dim); white-space: nowrap; flex: none; }
+  .stage-head .head-acts { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+  .stage-head .head-acts #btnSettings { margin-left: 4px; }
+  .stage-head .st { flex: none; max-width: 30vw; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st.ok { color: var(--ok); } .st.err { color: var(--err); } .st.warn { color: var(--warn); }
+
+  .viewer { flex: 1 1 auto; position: relative; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0; }
+  canvas, .viewer video {
+    display: block; background: #000; border-radius: var(--r-lg); touch-action: none; outline: none;
+    max-width: 100%; max-height: 100%; box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(0, 0, 0, .5);
+  }
+  canvas.off { display: none; }
+  #placeholder { color: var(--dim); text-align: center; line-height: 2; }
+  #placeholder b { display: block; color: var(--muted); font-weight: 500; font-size: 15px; margin-bottom: 4px; }
+
+  .clipbar {
+    display: flex; align-items: center; gap: 8px; flex: none;
+    padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .clipbar input { flex: 1 1 auto; }
+
+  /* ---- 右侧：安卓虚拟键 ---- */
+  .keybar {
+    width: 84px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 10px 8px 14px; background: var(--panel); border-left: 1px solid var(--line);
+    overflow-y: auto; min-height: 0;
+  }
+  /* 按键是"图标 + 文字"的竖排小件，高度由内容决定 */
+  .keybar .k {
+    width: 100%; height: auto; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 8px 2px; font-size: 11px; line-height: 1.25; border-radius: var(--r);
+    color: var(--muted);
+    /* 长按连发的前提：别让浏览器把"按住不放"理解成选文字 / 弹上下文菜单 */
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: manipulation;
+  }
+  .keybar .k:hover:not(:disabled) { color: var(--text); }
+  /* 按键图标：和顶栏那套箭头**完全同一套语言** —— 同样的 24 视窗、
+     同样的 1.9 线宽、同样的圆头圆角。之前这里是 12 个 emoji，
+     而顶栏早就是内联 SVG 了，整栏就它一个没跟上，看着就是"两种风格拼起来的"。 */
+  .keybar .k svg {
+    width: 20px; height: 20px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  /* 长按连发时会加这个类，给个"正在连发"的视觉反馈 */
+  .keybar .k.holding { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+  /* 息屏 / 亮屏 是同一颗按键的两种状态：两个图标都放在 DOM 里，用类切谁显谁隐。
+     之前是直接改一个 emoji 的文本，现在图标是 SVG，改文本那套不成立了。 */
+  .keybar .k .ico-on { display: none; }
+  .keybar .k.on .ico-off { display: none; }
+  .keybar .k.on .ico-on { display: block; }
+  .keybar .k.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+  /* 分组小标题：一排排图标没有标题就只能靠认图标，扫起来累 */
+  .keybar .kb-sec {
+    width: 100%; flex: none; text-align: center; font-size: 10px; color: var(--dim);
+    letter-spacing: 1.2px; margin: 7px 0 1px;
+    border-top: 1px solid var(--line); padding-top: 7px;
+  }
+  .keybar .kb-sec:first-of-type { border-top: none; padding-top: 0; margin-top: 2px; }
+  .keybar .kb-head { width: 100%; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+  .keybar .kb-title { font-size: 11px; color: var(--muted); letter-spacing: .5px; }
+
+  /* ---- 弹窗 ---- */
+  .mask { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 40; opacity: 0; pointer-events: none; transition: opacity .18s; }
+  .mask.show { opacity: 1; pointer-events: auto; }
+  .modal {
+    position: fixed; z-index: 50; left: 50%; top: 50%; transform: translate(-50%, -46%);
+    width: min(540px, 94vw); max-height: 88vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, .6); opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s;
+  }
+  .modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+  .modal .m-head {
+    display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+    border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 600;
+    position: sticky; top: 0; background: var(--panel); z-index: 1;
+  }
+  .modal .m-head .spacer { flex: 1; }
+  .modal .m-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .modal .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .modal label.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  .modal label.field .hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .modal .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; }
+  .modal .check { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
+  .modal .m-foot {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-top: 1px solid var(--line); position: sticky; bottom: 0; background: var(--panel);
+  }
+  .modal .m-foot .msg { font-size: 12px; color: var(--muted); }
+  .presets { display: flex; gap: 6px; }
+  .presets button { flex: 1 1 0; padding: 0 4px; font-size: 12px; }
+  /* 码率：数值 + 单位下拉，内部一律换算成 bps 再发给服务端 */
+  .rate { display: flex; gap: 6px; }
+  .rate input { flex: 1 1 auto; min-width: 0; }
+  .rate select { flex: none; width: 88px; }
+  /* 设置分组的小标题 */
+  .modal .sec {
+    font-size: 11px; color: var(--dim); letter-spacing: 1.2px;
+    padding-top: 12px; margin-top: 2px; border-top: 1px solid var(--line);
+  }
+  /* 第一个分组顶着弹窗标题，再来一条横线就是双线了 */
+  .modal .m-body > .sec:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+  /* 「设备信息」：连上时读回来的只读状态，一行一项，标签窄、值占满 */
+  .modal .dinfo { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  .modal .dinfo .drow { display: flex; gap: 10px; align-items: baseline; line-height: 1.7; }
+  .modal .dinfo .dk { flex: none; width: 74px; font-size: 12px; color: var(--muted); }
+  .modal .dinfo .dv { flex: 1 1 auto; min-width: 0; word-break: break-all; color: var(--text); }
+  .modal .dinfo .dv.mono { font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .modal .dinfo .dv.empty { color: var(--dim); }
+  .modal .dinfo .dv.refresh { color: var(--muted); }
+  /* 「无线配对」这类收起来的进阶项 */
+  .modal details.adv { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; }
+  .modal details.adv > summary { font-size: 13px; cursor: pointer; color: var(--muted); list-style: none; }
+  .modal details.adv > summary::-webkit-details-marker { display: none; }
+  .modal details.adv > summary::before { content: '▸ '; }
+  .modal details.adv[open] > summary::before { content: '▾ '; }
+  .modal details.adv > *:not(summary) { margin-top: 10px; }
+  .modal .row-foot { display: flex; align-items: center; gap: 10px; }
+  .modal .row-foot .msg { font-size: 12px; color: var(--muted); }
+
+  /* ---- 右侧抽屉（日志 / 状态 / 文件 / 终端）----
+     四块都是「从右边推进来」的面板，共用一套 .drawer 基类，宽度各自覆盖 ——
+     终端要宽（得塞下 80 列），文件和日志窄一点就够。
+     宽度收在 --drawer-w-* 这几个变量里：抽屉自己用它当 width，.app 用它当
+     padding-right 让位，一处定义两处对齐，不会出现「让位的宽度和抽屉宽度不一致」
+     那种半截盖住画面的情况。移动端仍旧用 vw 上限。 */
+  :root {
+    --drawer-w-log: min(460px, 92vw);
+    --drawer-w-stat: min(460px, 92vw);
+    --drawer-w-file: min(520px, 94vw);
+    --drawer-w-shell: min(760px, 96vw);
+  }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: var(--drawer-w-log);
+    background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; z-index: 60;
+    transform: translateX(100%); transition: transform .2s ease;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, .45);
+  }
+  .drawer.show { transform: translateX(0); }
+  .drawer .head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 14px; font-weight: 500; }
+  .drawer .head .spacer { flex: 1; }
+  #statPanel { width: var(--drawer-w-stat); }
+  #filePanel { width: var(--drawer-w-file); }
+  #shellPanel { width: var(--drawer-w-shell); }
+
+  /* ---- 文件抽屉 ----
+     一行里要塞下「图标 + 文件名 + 大小 + 几个小按钮」，除了文件名其它都不许收缩；
+     窄屏下把「大小」那列直接拿掉，否则文件名只剩两三个字。 */
+  #filePanel .fb-path {
+    display: flex; align-items: center; gap: 4px; flex: none;
+    padding: 7px 8px 7px 10px; border-bottom: 1px solid var(--line);
+  }
+  #filePanel .fb-crumbs {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 1px;
+    overflow-x: auto; white-space: nowrap; font-size: 12px; scrollbar-width: none;
+  }
+  #filePanel .fb-crumbs::-webkit-scrollbar { display: none; }
+  #filePanel .fb-crumbs button {
+    height: 24px; padding: 0 6px; font-size: 12px; background: transparent;
+    border-color: transparent; color: var(--muted); border-radius: 6px;
+  }
+  #filePanel .fb-crumbs button:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+  #filePanel .fb-crumbs .sep { color: var(--dim); flex: none; }
+  #filePanel .fb-tools { display: flex; align-items: center; gap: 6px; flex: none; padding: 8px 10px 6px; }
+  #filePanel .fb-tools .spacer { flex: 1; }
+  #fileList { flex: 1 1 auto; overflow: auto; padding: 2px 8px 10px; min-height: 0; }
+  #fileList .fempty { color: var(--dim); font-size: 13px; text-align: center; padding: 28px 8px; }
+  .frow {
+    display: flex; align-items: center; gap: 7px; padding: 5px 6px;
+    border-radius: var(--r-sm); border: 1px solid transparent;
+  }
+  .frow:hover { background: var(--panel-2); }
+  .frow .fi { width: 17px; height: 17px; flex: none; color: var(--dim); }
+  .frow.dir .fi { color: var(--accent); }
+  .frow .fi svg, .frow .fa .ri-btn svg {
+    display: block; width: 100%; height: 100%; fill: none;
+    stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .frow .fn {
+    flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .frow.dir .fn { cursor: pointer; }
+  .frow .fm { flex: none; font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .frow .fa { display: flex; gap: 2px; flex: none; }
+  /* 行内小图标按钮：不能被上面 button 的 32px 固定高撑开 */
+  .frow .fa .ri-btn {
+    width: 26px; height: 26px; padding: 4px; flex: none;
+    background: transparent; border: none; border-radius: 6px; color: var(--dim);
+  }
+  .frow .fa .ri-btn:hover:not(:disabled) { background: var(--panel-3); color: var(--text); }
+  .frow .fa .ri-btn.danger:hover:not(:disabled) { background: rgba(248, 113, 113, .14); color: var(--err); }
+  #filePanel .fb-foot { flex: none; border-top: 1px solid var(--line); padding: 9px 12px; font-size: 12px; color: var(--muted); word-break: break-all; }
+  #filePanel .fb-foot.bad { color: var(--err); }
+  #filePanel .fb-foot.good { color: var(--ok); }
+  /* 上传/下载的进度条。细一条就够 —— 要的是"在动"，因为以前只有一行文字，
+     而那行字会被目录刷新连盖两次，用户什么都没看见（见 app.js 的 fileMsgHoldUntil）。 */
+  #filePanel .fb-bar { flex: none; height: 3px; background: var(--panel-3); overflow: hidden; }
+  #filePanel .fb-bar[hidden] { display: none; }
+  #filePanel .fb-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
+  #filePanel .fb-bar.indet > i { width: 32%; animation: fbIndet 1.1s linear infinite; }
+  @keyframes fbIndet { from { margin-left: -34%; } to { margin-left: 100%; } }
+
+  /* ---- 终端抽屉 ---- */
+  #termHost { flex: 1 1 auto; min-height: 0; padding: 8px 0 6px 10px; background: #0a0d13; overflow: hidden; }
+  #termHost .xterm { height: 100%; }
+  #shellPanel .term-hint { flex: none; border-top: 1px solid var(--line); padding: 8px 12px; font-size: 12px; color: var(--dim); }
+  @media (max-width: 720px) {
+    .frow .fm { display: none; }
+    #termHost { padding: 6px 0 4px 6px; }
+  }
+  #logBody {
+    flex: 1; overflow: auto; padding: 12px 14px;
+    font: 12px/1.75 ui-monospace, Menlo, Consolas, monospace;
+    color: #b9c4d6; white-space: pre-wrap; word-break: break-all;
+  }
+  #logBody .r { color: var(--err); } #logBody .g { color: var(--ok); }
+  #logBody .y { color: var(--warn); } #logBody .m { color: #6b7893; }
+  #logStat { border-top: 1px solid var(--line); padding: 10px 14px; font: 12px/1.8 ui-monospace, Menlo, Consolas, monospace; color: #93a1b8; }
+  #logStat b { color: var(--text); font-weight: 500; }
+  #logStat .bad { color: var(--err); } #logStat .good { color: var(--ok); }
+
+  /* ---- 状态抽屉 ----
+     纯读数板、没有交互，布局只求两件事：数字跳动时别左右抖、长值别把行撑破。
+     所以值列右对齐 + 等宽字体 + 单行省略；只有「地址」这种天生很长的才允许折行。
+     两列在这儿够用（标签最长 6 个字），窄屏压到 92vw 也不用改成上下叠放。
+
+     ⚠️ 宽度**不在这里写** —— 认上面 `--drawer-w-stat` 那一份。
+     这里曾经还留着一句 `width: min(404px, 92vw)`（变量那套之前的老值），
+     它和变量版的 460px 同时生效、后写的赢，于是抽屉只有 404px、而 `.app` 照样
+     按 460px 让位 —— 中间那 56px 露出页面底色，就是主人 2026-09-23 报的那条黑带。
+     同一个面板两处宽度定义，看代码根本看不出来，所以只留一处。
+     （t 系列单测 DrawerWidthContractTests 守着：多一处就红。） */
+  #statBody { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 14px; }
+  #statBody .ssec { padding: 11px 14px 5px; }
+  #statBody .ssec + .ssec { border-top: 1px solid var(--line); }
+  #statBody .sh { font-size: 11px; letter-spacing: .06em; color: var(--dim); margin-bottom: 5px; }
+  #statBody .sr { display: flex; align-items: baseline; gap: 12px; padding: 3px 0; }
+  #statBody .sk { flex: 0 0 auto; font-size: 12.5px; color: var(--muted); }
+  #statBody .sv {
+    flex: 1 1 auto; min-width: 0; text-align: right; color: var(--text);
+    font: 12.5px/1.55 ui-monospace, Menlo, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 三个主角（分辨率 / 帧率 / 码率）放大一档，扫一眼就看得见 */
+  #statBody .sr.hero .sv { font-size: 15px; font-weight: 500; letter-spacing: -.2px; }
+  #statBody .sv.good { color: var(--ok); }
+  #statBody .sv.warn { color: var(--warn); }
+  #statBody .sv.bad  { color: var(--err); }
+  #statBody .sv.dim  { color: var(--dim); }
+  #statBody .sv.wrap { white-space: normal; word-break: break-all; line-height: 1.4; }
+
+  /* ================= 收起 / 展开：内联 SVG chevron =================
+     箭头一律指向「这一栏接下来要往哪边去」，悬停朝同方向轻推 2px：
+       左栏收起 = ←   左栏展开 = →
+       右栏收起 = →   右栏展开 = ←
+     箭头用 <path> 画，不用 scaleX 翻转 —— 翻转会把父级 padding 一起镜像。 */
+  .iconbtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; padding: 0; flex: none;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; color: var(--muted);
+  }
+  .iconbtn svg {
+    width: 16px; height: 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+    transition: transform .18s cubic-bezier(.4, 0, .2, 1);
+  }
+  .iconbtn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  .iconbtn:active:not(:disabled) { background: #26334a; color: var(--text); }
+  .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .iconbtn:disabled { opacity: .34; cursor: default; }
+  /* 这两处父级有 `xxx button { … }` 的通用规则，特异性比单个类高，得点名压回去 */
+  .side-head .iconbtn, .keybar .kb-head .iconbtn { padding: 0; }
+
+  /* 顶栏那两个「展开」：图标 + 文字的小胶囊 —— 光画箭头看不出能把栏拉回来 */
+  .pillbtn { display: inline-flex; align-items: center; gap: 5px; }
+  .pillbtn svg {
+    width: 14px; height: 14px; fill: none; stroke: currentColor;
+    stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+    transition: transform .18s cubic-bezier(.4, 0, .2, 1);
+  }
+  .iconbtn.to-l:hover:not(:disabled) svg,
+  .pillbtn.to-l:hover:not(:disabled) svg { transform: translateX(-2px); }
+  .iconbtn.to-r:hover:not(:disabled) svg,
+  .pillbtn.to-r:hover:not(:disabled) svg { transform: translateX(2px); }
+
+  /* ================= 全屏（沉浸）：把顶栏 / 底栏搬到左右两侧 =================
+     以前「全屏」只调用了 Fullscreen API —— 浏览器/App 的窗口框是没了，
+     但页面自己的顶栏和底部文本栏还在，画面上下各被啃掉一条，等于没全屏。
+     现在进全屏时把这两条整块搬进左栏（同两个节点，id 不变，事件不用重绑），
+     画面只剩上下一整块，真正铺满可视高度。 */
+  #sideSession, #sideCompose { display: none; }
+  .app.fs #sideSession, .app.fs #sideCompose { display: block; flex: none; }
+  /* ⚠️ 必须限定成「还在 .stage 里的那一份」。写宽了会把搬进侧栏的那份也一起藏掉
+     （搬过去的是同两个节点），表现就是"点了全屏什么都没了、也退不出来"。 */
+  .app.fs .stage > .stage-head, .app.fs .stage > .clipbar { display: none; }
+  .app.fs .viewer { padding: 0; }
+  .app.fs canvas, .app.fs .viewer video { border-radius: 0; box-shadow: none; }
+
+  /* 搬进左栏后竖着排：设备名一行、副信息一行、按钮换行铺满 */
+  .app.fs #sideSession .stage-head {
+    height: auto; flex-direction: column; align-items: stretch; gap: 7px;
+    padding: 11px 14px; border-bottom: 1px solid var(--line);
+  }
+  .app.fs #sideSession .head-info { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .app.fs #sideSession .cur, .app.fs #sideSession .st { max-width: none; font-size: 12px; }
+  /* 设备名给足层级：248px 宽的一列里，四行同号的字等于没有重点 */
+  .app.fs #sideSession .cur b { font-size: 14px; }
+  .app.fs #sideSession .meta { font-size: 11px; }
+  .app.fs #sideSession .head-acts { margin-left: 0; flex-wrap: wrap; gap: 6px; }
+  /* 底栏搬进左栏后：输入框和发送键分两行，248px 宽里并排会挤成两三个字 */
+  .app.fs #sideCompose .clipbar { flex-direction: column; align-items: stretch; gap: 7px; padding: 10px 12px; }
+  .app.fs #sideCompose .clipbar input, .app.fs #sideCompose .clipbar button { width: 100%; }
+
+  /* 全屏且左栏被收起时，顶栏那套按钮也跟着藏了 —— 屏幕上必须留一组浮起来的键，
+     否则进了全屏就再也叫不出侧栏、也退不出来（安卓 WebView 里未必有 Esc 可用）。
+     这两个按钮给一点半透明底，压在画面上才看得清。 */
+  #fsBar { position: fixed; top: 10px; left: 10px; z-index: 35; display: none; gap: 6px; }
+  #fsBar button {
+    background: rgba(17, 23, 34, .86); border-color: var(--line);
+    backdrop-filter: blur(6px); box-shadow: var(--sh);
+  }
+  .app.fs.side-off #fsBar { display: flex; }
+
+  /* ================= 窄屏适配 ================= */
+  @media (max-width: 900px) {
+    .sidebar { width: min(76vw, 268px); }
+    .keybar { width: 72px; }
+    /* 顶栏塞不下就换行：一行是设备名 + 状态，一行是按钮 */
+    .stage-head { height: auto; min-height: 46px; flex-wrap: wrap; gap: 7px; padding: 8px 10px; }
+    .stage-head .head-info { flex: 1 1 auto; }
+    .stage-head .meta { display: none; }
+    .stage-head .head-acts { flex: 1 1 100%; margin-left: 0; flex-wrap: wrap; }
+    .modal .grid2, .modal .checks { grid-template-columns: 1fr; }
+  }
+  /* 手机 / 竖屏平板：侧栏改成**浮层抽屉**，不再占布局宽度。
+     算笔账就明白为什么必须这样：侧栏 268 + 按键栏 72 = 340，而顶栏那排按钮的
+     min-content 加起来约 380（两个展开胶囊 + 设备设置/日志/全屏，按钮是没法规缩小的）。
+     340 + 380 = 720 —— 视口比这个窄，那个 23px 宽的中间栏就塞不下顶栏，
+     整页被撑出视口（363 的屏实测 scrollWidth 387），右边那排按钮直接看不见。
+     改成浮层后中间那栏永远是整宽减按键栏，画面不再被设备列表挤成一条缝。 */
+  @media (max-width: 820px) {
+    .sidebar {
+      position: fixed; top: 0; left: 0; bottom: 0; z-index: 45;
+      width: min(84vw, 300px); box-shadow: 12px 0 34px rgba(0, 0, 0, .55);
+    }
+  }
+  @media (max-width: 720px) {
+    /* 触摸热区要够大，否则手指点不中那个小箭头。44×44 是之前定过并验过的值，别往下调 */
+    .iconbtn { width: 44px; height: 44px; }
+    .iconbtn svg { width: 18px; height: 18px; }
+    /* 按键图标也放大一档，和 44px 的热区成比例 */
+    .keybar .k svg { width: 22px; height: 22px; }
+    .pillbtn { height: 36px; padding: 0 12px; }
+    .side-actions .row button { height: 36px; }
+    /* 热区一放大，「按键」两个字和 44px 的箭头在 72px 宽的栏里就横着塞不下了，
+       会被挤成「按/键」两行 —— 改成上下叠着放 */
+    .keybar .kb-head { flex-direction: column; justify-content: center; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 全屏 + 左栏收起时的兜底键（平时不显示）：叫回设备列表 / 退出全屏 -->
+  <div id="fsBar">
+    <button class="ghost pillbtn to-l" id="fsPill" title="展开设备列表">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>设备列表
+    </button>
+    <button class="ghost" id="fsExit" title="退出全屏">退出全屏</button>
+  </div>
+
+  <!-- 左：设备列表 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand" id="brand"><span class="dot"></span>牛牛牧场</div>
+
+    <!-- 全屏时顶栏搬进这里 -->
+    <div id="sideSession"></div>
+
+    <div class="side-actions">
+      <button class="primary" id="btnAdd">添加设备</button>
+      <div class="row">
+        <button id="btnDisconnect" disabled>断开</button>
+        <button id="btnRemove" disabled>删除设备</button>
+      </div>
+    </div>
+
+    <div class="side-head">
+      <span>设备列表</span>
+      <span class="spacer"></span>
+      <button class="ghost mini" id="btnRefresh">刷新</button>
+      <button class="iconbtn to-l" id="btnSidebarHide" title="收起设备列表" aria-label="收起设备列表">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+      </button>
+    </div>
+    <div class="devices" id="devices"></div>
+
+    <!-- 全屏时底部文本栏搬进这里 -->
+    <div id="sideCompose"></div>
+  </aside>
+
+  <!-- 中：画面 -->
+  <main class="stage">
+    <header class="stage-head">
+      <div class="head-info">
+        <span class="cur">当前设备：<b id="curName">未选择</b></span>
+        <span class="meta" id="curMeta"></span>
+      </div>
+      <span class="st" id="status">未连接</span>
+      <div class="head-acts">
+        <button class="ghost pillbtn to-l" id="btnSidebarShow" style="display:none" title="展开设备列表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>设备列表</button>
+        <button class="ghost pillbtn to-r" id="btnKeysShow" style="display:none" title="展开按键栏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>按键</button>
+        <button class="ghost" id="btnFiles">文件</button>
+        <button class="ghost" id="btnShell">终端</button>
+        <button class="ghost" id="btnSettings">设备设置</button>
+        <button class="ghost" id="btnLog">日志</button>
+        <button class="ghost" id="btnStat">状态</button>
+        <button class="ghost" id="btnFull">全屏</button>
+      </div>
+    </header>
+    <section class="viewer" id="stage">
+      <div id="placeholder">
+        <b>还没连上</b>
+        左边选一台设备，或者点「添加设备」加一台
+      </div>
+      <canvas id="screen" class="off" tabindex="0"></canvas>
+    </section>
+    <footer class="clipbar">
+      <input type="text" id="clipText" placeholder="要发到设备的文本（回车发送）" spellcheck="false">
+      <button id="btnPaste" disabled>发送</button>
+    </footer>
+  </main>
+
+  <!-- 右：安卓虚拟键 -->
+  <nav class="keybar" id="keybar">
+    <div class="kb-head">
+      <span class="kb-title">按键</span>
+      <button class="iconbtn to-r" id="btnKeysHide" title="收起按键栏" aria-label="收起按键栏">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
+      </button>
+    </div>
+    <div class="kb-sec">声音</div>
+    <button class="k" data-key="24" data-hold-key="24" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.6h3.4L11.4 6.2v11.6L7.4 14.4H4z"/><path d="M15.2 9.8v4.8M12.8 12.2h4.8"/></svg>
+      音量+
+    </button>
+    <button class="k" data-key="25" data-hold-key="25" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.6h3.4L11.4 6.2v11.6L7.4 14.4H4z"/><path d="M12.8 12.2h4.8"/></svg>
+      音量−
+    </button>
+    <div class="kb-sec">系统</div>
+    <button class="k" data-key="26" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6v8"/><path d="M7.9 6.8a6.8 6.8 0 1 0 8.2 0"/></svg>
+      电源
+    </button>
+    <button class="k" data-key="187" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5.2" y="5.2" width="13.6" height="13.6" rx="2.6"/></svg>
+      任务
+    </button>
+    <button class="k" data-key="3" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 10.9 12 4.4l7.8 6.5V19a1.6 1.6 0 0 1-1.6 1.6H5.8A1.6 1.6 0 0 1 4.2 19z"/></svg>
+      主页
+    </button>
+    <button class="k" data-key="4" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.6 12H5.6"/><path d="M10.8 6.6 5.2 12l5.6 5.4"/></svg>
+      返回
+    </button>
+    <div class="kb-sec">面板</div>
+    <button class="k" data-panel="notify" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.9 15.6v-5.9a5.1 5.1 0 0 1 10.2 0v5.9l1.5 2.5H5.4z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/></svg>
+      通知栏
+    </button>
+    <button class="k" data-panel="settings" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.8 7h3.4M11.4 7h8.8"/><circle cx="9.2" cy="7" r="2.2"/><path d="M3.8 12h8.8M17 12h3.2"/><circle cx="14.8" cy="12" r="2.2"/><path d="M3.8 17h3.4M11.4 17h8.8"/><circle cx="9.2" cy="17" r="2.2"/></svg>
+      快捷设置
+    </button>
+    <button class="k" data-panel="collapse" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.6 6.4h12.8"/><path d="M8 15.8 12 11.8l4 4"/></svg>
+      收起面板
+    </button>
+    <div class="kb-sec">其他</div>
+    <button class="k" data-act="rotate" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.6 12.4A6.6 6.6 0 1 1 12 5.8"/><path d="M9.8 3.3 12 5.8l-2.2 2.5"/></svg>
+      旋转
+    </button>
+    <button class="k" data-act="power" disabled>
+      <svg class="ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>
+      <svg class="ico-on" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 6.4V4.4M12 17.6v2M6.4 12H4.4M17.6 12h2M8 8 6.6 6.6M16 8l1.4-1.4M8 16l-1.4 1.4M16 16l1.4 1.4"/></svg>
+      <span class="br">息屏</span>
+    </button>
+    <button class="k" data-act="clip" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.8" width="6" height="4" rx="1.2"/><path d="M15 4.8h1.6A1.6 1.6 0 0 1 18.2 6.4v12.4a1.6 1.6 0 0 1-1.6 1.6H7.4a1.6 1.6 0 0 1-1.6-1.6V6.4A1.6 1.6 0 0 1 7.4 4.8H9"/></svg>
+      剪贴板
+    </button>
+  </nav>
+</div>
+
+<!-- 添加设备 -->
+<div class="mask" id="mask"></div>
+<div class="modal" id="connModal">
+  <div class="m-head"><span>添加设备</span><span class="spacer"></span><button class="ghost" data-close="connModal">关闭</button></div>
+  <div class="m-body">
+    <div class="grid2">
+      <label class="field">设备 IP / 主机
+        <input type="text" id="connHost" placeholder="192.168.1.10" spellcheck="false">
+      </label>
+      <label class="field">端口
+        <input type="number" id="connPort" min="1" max="65535" placeholder="5555">
+        <span class="hint">adb 默认 5555</span>
+      </label>
+    </div>
+    <label class="field">显示名称
+      <input type="text" id="connName" maxlength="60" placeholder="可留空，默认用设备型号">
+      <span class="hint">几台设备同型号时，起个名字好区分。</span>
+    </label>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="connTop"><span>置顶显示</span></label>
+    </div>
+    <div class="field">adb 已发现的设备
+      <div id="connFound" class="checks"></div>
+      <span class="hint">点一下把地址填进来。</span>
+    </div>
+    <details class="adv">
+      <summary>无线配对（Android 11 及以上）</summary>
+      <div class="grid2">
+        <label class="field">配对端口
+          <input type="number" id="pairPort" min="1" max="65535" placeholder="如 37123">
+        </label>
+        <label class="field">配对码
+          <input type="text" id="pairCode" placeholder="6 位数字" spellcheck="false">
+        </label>
+      </div>
+      <div class="row-foot">
+        <button id="pairGo">配对</button>
+        <span class="msg" id="pairMsg"></span>
+      </div>
+      <span class="hint">在手机上「开发者选项 → 无线调试 → 使用配对码配对设备」里能看到这两项。</span>
+    </details>
+  </div>
+  <div class="m-foot">
+    <button class="primary" id="connGo">添加并连接</button>
+    <span class="msg" id="connMsg"></span>
+  </div>
+</div>
+
+<!-- 每设备投屏设置 -->
+<div class="modal" id="setModal">
+  <div class="m-head"><span>设备设置</span><span class="spacer"></span><b id="setWho" style="font-weight:500;font-size:12px;color:#8a97ae"></b><button class="ghost" data-close="setModal">关闭</button></div>
+  <div class="m-body">
+    <div class="sec">设备</div>
+    <label class="field">显示名称
+      <input type="text" id="setName" maxlength="60" placeholder="留空＝显示设备型号">
+      <span class="hint">就是左边设备列表里那个名字，改完点下面保存。</span>
+    </label>
+
+    <div class="sec">设备信息</div>
+    <div class="dinfo" id="devInfo"></div>
+
+    <div class="sec">画质</div>
+    <div class="presets" role="group" aria-label="推荐配置">
+      <button data-preset="quality">画质优先</button>
+      <button data-preset="balanced">均衡</button>
+      <button data-preset="saver">省流</button>
+      <button data-preset="max-saver">极限省流</button>
+    </div>
+    <div class="grid2">
+      <label class="field">码率
+        <span class="rate">
+          <input type="number" id="setBitRate" min="0.1" step="0.5" placeholder="8">
+          <select id="setBitRateUnit">
+            <option value="1000000">Mbps</option>
+            <option value="1000">kbps</option>
+          </select>
+        </span>
+        <span class="hint">按屏幕分辨率自动算出来的，也可以自己改</span>
+      </label>
+      <label class="field">帧率
+        <input type="number" id="setMaxFps" min="0" max="120" step="1" placeholder="60">
+        <span class="hint">0 = 设备默认</span>
+      </label>
+    </div>
+    <div class="grid2">
+      <label class="field">编码协议
+        <select id="setCodec">
+          <option value="auto">自动</option>
+          <option value="h264">H.264</option>
+          <option value="h265">H.265</option>
+          <option value="av1">AV1</option>
+          <option value="vp9">VP9</option>
+          <option value="vp8">VP8</option>
+        </select>
+        <span class="hint">自动＝在这台设备支持的编码器里挑效率最高的一个</span>
+        <span class="hint" id="codecHint" style="display:none"></span>
+      </label>
+      <label class="field">分辨率上限
+        <select id="setMaxSize">
+          <option value="0">原画</option>
+          <option value="2160">2160p</option>
+          <option value="1440">1440p</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+        </select>
+        <span class="hint">目标高度，保持原始比例；原画不缩放</span>
+      </label>
+    </div>
+    <div class="grid2">
+      <label class="field">屏幕方向
+        <select id="setAngle">
+          <option value="0">跟随设备</option>
+          <option value="90">旋转 90°</option>
+          <option value="180">旋转 180°</option>
+          <option value="270">旋转 270°</option>
+        </select>
+      </label>
+      <label class="field">裁剪
+        <input type="text" id="setCrop" placeholder="宽:高:横偏移:纵偏移" spellcheck="false">
+        <span class="hint">留空＝不裁剪</span>
+      </label>
+    </div>
+
+    <div class="sec">音频</div>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="setAudio"><span>把设备的声音一起传过来</span></label>
+    </div>
+    <div class="grid2">
+      <label class="field">音频码率
+        <span class="rate">
+          <input type="number" id="setAudioBitRate" min="8" max="320" step="8" placeholder="128">
+          <select id="setAudioBitRateUnit">
+            <option value="1000">kbps</option>
+          </select>
+        </span>
+      </label>
+      <label class="field">音频编码
+        <select id="setAudioCodec">
+          <option value="aac">AAC</option>
+          <option value="opus">Opus</option>
+        </select>
+      </label>
+    </div>
+    <label class="field">声音来源
+      <select id="setAudioSource">
+        <option value="output">设备输出（推荐）</option>
+        <option value="playback">播放（含系统提示音）</option>
+        <option value="mic">麦克风</option>
+        <option value="voice_call">通话</option>
+      </select>
+    </label>
+
+    <div class="sec">画面与设备</div>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="setShowTouches"><span>显示触摸</span></label>
+      <label class="check"><input type="checkbox" id="setKeepActive"><span>屏幕不自动熄灭</span></label>
+      <label class="check"><input type="checkbox" id="setStayAwake"><span>充电时保持唤醒</span></label>
+      <label class="check"><input type="checkbox" id="setPowerOn"><span>连接时唤醒设备</span></label>
+      <label class="check"><input type="checkbox" id="setStartScreenOff"><span>连接后关屏</span></label>
+      <label class="check"><input type="checkbox" id="setPowerOffOnClose"><span>断开时关屏</span></label>
+      <label class="check"><input type="checkbox" id="setClipboardAutosync"><span>剪贴板自动同步</span></label>
+    </div>
+    <label class="field">屏幕自动熄灭
+      <select id="setScreenOffTimeout">
+        <option value="0">不改动</option>
+        <option value="60000">1 分钟</option>
+        <option value="300000">5 分钟</option>
+        <option value="600000">10 分钟</option>
+        <option value="1800000">30 分钟</option>
+        <option value="2147483647">一直不熄</option>
+      </select>
+      <span class="hint">只在投屏期间生效，断开后还原成原来的值</span>
+    </label>
+  </div>
+  <div class="m-foot">
+    <button class="primary" id="setSave">保存</button>
+    <span class="msg" id="setMsg"></span>
+  </div>
+</div>
+
+<!-- 删除确认（删除是不可逆的，一定要问一句） -->
+<div class="modal" id="confirmModal">
+  <div class="m-head"><span>确认删除</span><span class="spacer"></span><button class="ghost" data-close="confirmModal">取消</button></div>
+  <div class="m-body">
+    <p id="confirmText" style="margin:0;font-size:13px;line-height:1.9;white-space:pre-line"></p>
+  </div>
+  <div class="m-foot">
+    <button class="danger" id="confirmOk">删除</button>
+    <span class="msg" id="confirmMsg"></span>
+  </div>
+</div>
+
+<!-- 剪贴板 -->
+<div class="modal" id="clipModal">
+  <div class="m-head"><span>剪贴板</span><span class="spacer"></span><button class="ghost" data-close="clipModal">关闭</button></div>
+  <div class="m-body">
+    <textarea id="clipArea" rows="6" placeholder="输入或粘贴文本，然后点「传到设备」"></textarea>
+  </div>
+  <div class="m-foot">
+    <button class="primary" id="clipSend">传到设备（并粘贴）</button>
+    <span class="msg" id="clipMsg"></span>
+  </div>
+</div>
+
+<!-- 通用输入：新建文件夹 / 重命名都借它。以前这两个动作没有入口，
+     再给每个单独写一个弹窗就成了三份几乎一样的 HTML。 -->
+<div class="modal" id="inputModal">
+  <div class="m-head"><span id="inputTitle">输入</span><span class="spacer"></span><button class="ghost" data-close="inputModal">取消</button></div>
+  <div class="m-body">
+    <label class="field"><span id="inputLabel">名称</span>
+      <input type="text" id="inputValue" spellcheck="false" autocomplete="off">
+      <span class="hint" id="inputHint"></span>
+    </label>
+  </div>
+  <div class="m-foot">
+    <button class="primary" id="inputOk">确定</button>
+  </div>
+</div>
+
+<!-- 日志 -->
+<aside id="logPanel" class="drawer">
+  <div class="head">
+    <span>运行状态与日志</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="btnLogClear">清空</button>
+    <button class="ghost" id="btnLogClose">关闭</button>
+  </div>
+  <div id="logStat"></div>
+  <div id="logBody"></div>
+</aside>
+
+<!-- 实时状态（数字每秒刷一次，内容由 app.js 的 statRender 生成） -->
+<aside id="statPanel" class="drawer">
+  <div class="head">
+    <span>实时状态</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="btnStatClose">关闭</button>
+  </div>
+  <div id="statBody"></div>
+</aside>
+
+<!-- 文件管理 -->
+<aside id="filePanel" class="drawer">
+  <div class="head">
+    <span>文件</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="btnFileClose">关闭</button>
+  </div>
+  <div class="fb-path">
+    <button class="iconbtn" id="btnFileUp" title="上一级" aria-label="上一级">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6"/><path d="M6.8 11 12 5.8 17.2 11"/></svg>
+    </button>
+    <div class="fb-crumbs" id="fileCrumbs"></div>
+    <button class="iconbtn" id="btnFileRefresh" title="刷新" aria-label="刷新">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.2 12a7.2 7.2 0 1 1-2.2-5.1"/><path d="M19.4 5.2V8.8h-3.6"/></svg>
+    </button>
+  </div>
+  <div class="fb-tools">
+    <button class="mini" id="btnFileUpload">上传</button>
+    <button class="mini" id="btnFileMkdir">新建文件夹</button>
+    <span class="spacer"></span>
+    <button class="mini" id="btnFileRoot" title="跳到 /sdcard">内部存储</button>
+    <button class="mini" id="btnFileTmp" title="跳到 /data/local/tmp">tmp</button>
+  </div>
+  <div id="fileList"></div>
+  <div class="fb-foot" id="fileMsg">…</div>
+  <div class="fb-bar" id="fileBar" hidden><i></i></div>
+  <input type="file" id="filePick" multiple style="display:none">
+</aside>
+
+<!-- 终端 -->
+<aside id="shellPanel" class="drawer">
+  <div class="head">
+    <span>终端</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="btnShellClear">清屏</button>
+    <button class="ghost" id="btnShellClose">关闭</button>
+  </div>
+  <div id="termHost"></div>
+  <div class="term-hint">直接敲命令，回车执行。窗口大小会跟着这块面板自动调整。</div>
+</aside>
+
+<script>
+// 应用挂在 /app/<appname> 下，但 iframe 打开的地址可能没有尾斜杠。
+// 这时 <script src="app.js"> 这种相对路径会被解析到上一层（/app/app.js）直接 404，
+// 表现就是「页面出来了，但点什么都没反应」—— 因为 JS 根本没加载。
+// 所以这里自己推导前缀，用绝对路径把脚本挂上去。async=false 保证加载顺序。
+// xterm（终端）的两份库也走同一条路：它们同样在 lib/ 子目录里，相对路径一样会踩坑。
+(function () {
+  var base = location.pathname
+    .replace(/\/index\.html$/, '')
+    .replace(/\/+$/, '');
+  var css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = base + '/lib/xterm.css';
+  document.head.appendChild(css);
+  // xterm.js → addon-fit.js → mp4.js → app.js，顺序不能乱：app.js 里两个都要用
+  ['/lib/xterm.js', '/lib/addon-fit.js', '/mp4.js', '/app.js'].forEach(function (p) {
+    var s = document.createElement('script');
+    s.src = base + p;
+    s.async = false;
+    document.body.appendChild(s);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+# H.264 黑屏修复：应用侧补 CONFIG / KEY_FRAME 标记
+# 新文件 app/h264norm.py 见同目录（diff 只含 session.py 的改动）
+
+--- a/app/session.py
++++ b/app/session.py
+@@ -23,6 +23,7 @@
+ import time
+ 
+ import adbproto
++import h264norm
+ import scrcpy_proto as P
+ 
+ SERVER_JAR_REMOTE = "/data/local/tmp/scrcpy-server.jar"
+@@ -232,6 +233,9 @@
+         self.control_stream = None
+         self._video_in = None
+         self._audio_in = None
++        # H.264 的包规范化器（见 h264norm.py）。只在 codec 真是 h264 时建，
++        # 而且建好之后才启动 _video_loop —— 它看到的包一定已经是规范化过的。
++        self._h264 = None
+ 
+         self.device_name = ""
+         self.codec = "h264"
+@@ -470,6 +474,13 @@
+         self._read_video_preamble()
+         self.log("视频就绪：device=%s codec=%s" % (self.device_name, self.codec))
+ 
++        # 有些编码器（redroid 那个硬编组件就是）吐出来的 H.264 不置 CONFIG / KEY_FRAME
++        # 标记，SPS/PPS 却混在普通视频包里 —— 我们不补标记，hub 会把它全当 P 帧滤掉、
++        # 前端也永远等不到 CONFIG 包，结果就是整屏黑。这里按 codec 建规范化器，
++        # 且必须**在 _video_loop 起来之前**建好（这一刻 self.codec 已经定了）。
++        # 非 H.264 时 normalizer_for 返回 None，包原样透传。
++        self._h264 = h264norm.normalizer_for(self.codec, self.log)
++
+         self._start_thread(self._video_loop, "video")
+         if self.audio_stream is not None:
+             # 音频头要等设备端编码器出数据才来，可能慢 —— 放到线程里读，
+@@ -505,6 +516,12 @@
+         self._threads.append(t)
+ 
+     def _video_loop(self):
++        """读视频流。
++
++        ⚠️ 对 H.264，交给 on_packet 的**不是**设备原包，而是规范化之后的包
++        （见 h264norm.py）—— 需要补 CONFIG 时，同一个原始包会变成两个包先后发出去。
++        其它编码原样透传，`on_packet` 拿到的就是设备原包。
++        """
+         try:
+             while not self._stop.is_set():
+                 header = self._video_in.read_exact(P.PACKET_HEADER_SIZE, timeout=60)
+@@ -513,12 +530,20 @@
+                     _, w, h, resized = kind
+                     self.width, self.height = w, h
+                     self.log("会话尺寸：%dx%d" % (w, h))
++                    if self._h264 is not None:
++                        # 新起的流 / 尺寸变了：缓存的 SPS/PPS 作废，等码流里再带出来
++                        self._h264.reset()
+                     self.on_session(w, h, resized)
+                     continue
+                 _, pts_flags, size = kind
+                 if size <= 0:
+                     continue
+-                self.on_packet(pts_flags, self._video_in.read_exact(size, timeout=60))
++                payload = self._video_in.read_exact(size, timeout=60)
++                if self._h264 is None:
++                    self.on_packet(pts_flags, payload)
++                else:
++                    for flags, data in self._h264.normalize(pts_flags, payload):
++                        self.on_packet(flags, data)
+         except Exception as exc:
+             if not self._stop.is_set():
+                 self.last_error = "视频流中断：%s" % exc

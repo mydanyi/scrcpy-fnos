@@ -1,0 +1,12 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "scrcpy-fnos"
+      },
+      {
+        "name": "scrcpy-fnos/data"
+      }
+    ]
+  }
+}

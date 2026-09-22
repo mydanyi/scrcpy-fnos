@@ -1,0 +1,56 @@
+#!/bin/bash
+# 卸载应用前：停掉本项目启动的服务进程，保留用户数据
+#
+# 优先按 pidfile 停；pidfile 丢了（上次被强杀之类）再按脚本路径兜底。
+# 两条路都只认本应用自己的 server.py —— 宿主机上别的 python 进程一律不碰。
+#
+# 注意：这里的路径与 cmd/main 保持一致，改一处要同步改两处。
+
+LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
+SERVER_PY="${TRIM_APPDEST}/server.py"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+SOCKET="${TRIM_APPDEST}/app.sock"
+
+log_msg() {
+    mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+kill_pid() {
+    local pid="$1"
+    [ -n "${pid}" ] || return 0
+    kill -0 "${pid}" 2>/dev/null || return 0
+    kill "${pid}" 2>/dev/null || true
+    sleep 1
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -9 "${pid}" 2>/dev/null || true
+    fi
+    return 0
+}
+
+PID=""
+if [ -f "${PID_FILE}" ]; then
+    IFS= read -r PID < "${PID_FILE}" 2>/dev/null || PID=""
+    case "${PID}" in ''|*[!0-9]*) PID="" ;; esac
+fi
+
+if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
+    log_msg "Stopping service by pidfile (pid=${PID}) ..."
+    kill_pid "${PID}"
+else
+    # pidfile 不可用：按脚本完整路径兜底
+    PIDS="$(pgrep -f "${SERVER_PY}" 2>/dev/null || true)"
+    if [ -n "${PIDS}" ]; then
+        log_msg "Stopping service by path match (pids: ${PIDS}) ..."
+        for p in ${PIDS}; do
+            kill_pid "${p}"
+        done
+    else
+        log_msg "No running service found, nothing to stop."
+    fi
+fi
+
+rm -f "${PID_FILE}" "${SOCKET}"
+log_msg "uninstall_init done. (用户数据 ${TRIM_PKGVAR} 保留)"
+
+exit 0

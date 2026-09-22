@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "scrcpy-fnos.Application": {
+            "title": "牛牛牧场",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "gatewayPrefix": "/app/scrcpy-fnos",
+            "gatewaySocket": "app.sock",
+            "url": "/app/scrcpy-fnos",
+            "allUsers": false
+        }
+    }
+}
