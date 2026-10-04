@@ -76,7 +76,9 @@
 
 ## 许可证
 
-本仓库目前是私有的，代码暂以作者保留所有权利的方式存放。
+代码以 **GPL-3.0 + 附加条款** 发布：你可以免费用、改、分享，但**不能拿它赚钱**，
+而且**改了之后对外发布必须同样开源**。完整条款见 [LICENSE](LICENSE)。
+
 `app/tool/` 下的 adb 与 scrcpy-server 是第三方组件，遵循它们各自的协议
 （见 `app/tool/LICENSE`、`app/tool/adb-NOTICE.txt`）。
 
